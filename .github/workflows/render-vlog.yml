@@ -1,17 +1,12 @@
 name: Render energetic BDA vlog
 
 on:
-  push:
-    branches: [vlog-edit]
   pull_request:
     branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
-
-env:
-  PIP_DISABLE_PIP_VERSION_CHECK: "1"
 
 jobs:
   render:
@@ -23,6 +18,11 @@ jobs:
         with:
           lfs: true
           fetch-depth: 1
+
+      - name: Install FFmpeg and Chinese fonts
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg fonts-noto-cjk
 
       - name: Pull and verify the real source video
         shell: bash
@@ -40,10 +40,8 @@ jobs:
           fi
           ffprobe -v error -show_entries format=duration,size -of default=noprint_wrappers=1 "$VIDEO"
 
-      - name: Install FFmpeg, fonts, and speech recognition
+      - name: Install speech recognition
         run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg fonts-noto-cjk
           python -m pip install --upgrade pip
           python -m pip install openai-whisper
 
