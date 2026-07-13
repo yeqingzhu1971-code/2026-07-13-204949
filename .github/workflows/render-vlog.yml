@@ -3,6 +3,8 @@ name: Render energetic BDA vlog
 on:
   push:
     branches: [vlog-edit]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -16,13 +18,29 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 180
     steps:
-      - name: Check out repository and LFS video
+      - name: Check out repository and Git LFS source
         uses: actions/checkout@v4
         with:
           lfs: true
           fetch-depth: 1
 
-      - name: Install FFmpeg, fonts, and Python dependencies
+      - name: Pull and verify the real source video
+        shell: bash
+        run: |
+          git lfs install
+          git lfs pull
+          VIDEO="2026-07-13 204949.mov"
+          test -f "$VIDEO"
+          SIZE=$(stat -c%s "$VIDEO")
+          echo "Source size: $SIZE bytes"
+          if [ "$SIZE" -lt 1000000000 ]; then
+            echo "Git LFS did not provide the real video body"
+            head -20 "$VIDEO" || true
+            exit 1
+          fi
+          ffprobe -v error -show_entries format=duration,size -of default=noprint_wrappers=1 "$VIDEO"
+
+      - name: Install FFmpeg, fonts, and speech recognition
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg fonts-noto-cjk
@@ -32,7 +50,7 @@ jobs:
       - name: Render vlog
         run: python tools/render_vlog.py
 
-      - name: List outputs
+      - name: Verify outputs
         run: |
           ls -lh output
           ffprobe -v error -show_entries format=duration,size -of default=noprint_wrappers=1 "output/北舞高能量毕业生_嘴闲不住的一天_vlog.mp4"
