@@ -1,0 +1,63 @@
+name: Analyze full vlog source
+
+on:
+  push:
+    branches: [vlog-edit]
+    paths:
+      - '.github/workflows/analyze-source.yml'
+      - 'tools/analyze_source.py'
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/analyze-source.yml'
+      - 'tools/analyze_source.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - name: Check out repository and Git LFS source
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+          fetch-depth: 1
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg fonts-noto-cjk
+          python -m pip install --upgrade pip
+          python -m pip install faster-whisper
+
+      - name: Pull and verify source body
+        shell: bash
+        run: |
+          git lfs install
+          git lfs pull
+          VIDEO="2026-07-13 204949.mov"
+          test -f "$VIDEO"
+          SIZE=$(stat -c%s "$VIDEO")
+          echo "Source size: $SIZE bytes"
+          test "$SIZE" -gt 1000000000
+          ffprobe -v error -show_entries format=duration,size -of default=noprint_wrappers=1 "$VIDEO"
+
+      - name: Build proxy, contact sheets, scene index and transcript
+        run: python tools/analyze_source.py
+
+      - name: Verify analysis package
+        run: |
+          find source_analysis -maxdepth 1 -type f -printf '%f %s bytes\n' | sort
+          ffprobe -v error -show_entries format=duration,size -of default=noprint_wrappers=1 source_analysis/source_proxy_timecode.mp4
+
+      - name: Upload analysis package
+        uses: actions/upload-artifact@v4
+        with:
+          name: full-vlog-source-analysis
+          path: source_analysis/*
+          compression-level: 0
+          retention-days: 14
