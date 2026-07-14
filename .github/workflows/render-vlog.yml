@@ -42,10 +42,8 @@ jobs:
           from pathlib import Path
           p = Path('tools/render_vlog_v2.py')
           s = p.read_text(encoding='utf-8')
-          old = '''            "ffmpeg", "-y", "-ss", f"{start:.3f}", "-i", str(src),
-                      "-t", f"{duration:.3f}", "-vf", vf, "-af", af,'''
-          new = '''            "ffmpeg", "-y", "-ss", f"{start:.3f}", "-t", f"{duration:.3f}", "-i", str(src),
-                      "-vf", vf, "-af", af,'''
+          old = '"ffmpeg", "-y", "-ss", f"{start:.3f}", "-i", str(src),\n            "-t", f"{duration:.3f}",'
+          new = '"ffmpeg", "-y", "-ss", f"{start:.3f}", "-t", f"{duration:.3f}", "-i", str(src),'
           if old in s:
               s = s.replace(old, new)
           elif new not in s:
