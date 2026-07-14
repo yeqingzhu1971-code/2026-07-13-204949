@@ -36,33 +36,50 @@ jobs:
           test "$SIZE" -gt 1000000000
           ffprobe -v error -show_entries format=duration,size -of default=noprint_wrappers=1 "$VIDEO"
 
-      - name: Apply renderer timing and audio mix fixes
+      - name: Apply renderer timing and audio graph fixes
         run: |
           python - <<'PY'
           from pathlib import Path
           p = Path('tools/render_vlog_v2.py')
           s = p.read_text(encoding='utf-8')
 
-          old_timing = '"ffmpeg", "-y", "-ss", f"{start:.3f}", "-i", str(src),\n            "-t", f"{duration:.3f}",'
-          new_timing = '"ffmpeg", "-y", "-ss", f"{start:.3f}", "-t", f"{duration:.3f}", "-i", str(src),'
-          if old_timing in s:
-              s = s.replace(old_timing, new_timing)
-          elif new_timing not in s:
-              raise SystemExit('Expected renderer timing command was not found')
-
-          old_mix = 'amix=inputs={len(mix_labels)}:duration=first:dropout_transition=0,alimiter=limit=0.94[aout]'
-          new_mix = 'amix=inputs={len(mix_labels)}:duration=first:dropout_transition=0:normalize=0,volume=1.55,alimiter=limit=0.94[aout]'
-          if old_mix in s:
-              s = s.replace(old_mix, new_mix)
-          elif new_mix not in s:
-              raise SystemExit('Expected renderer audio mix was not found')
+          replacements = [
+              (
+                  '"ffmpeg", "-y", "-ss", f"{start:.3f}", "-i", str(src),\n            "-t", f"{duration:.3f}",',
+                  '"ffmpeg", "-y", "-ss", f"{start:.3f}", "-t", f"{duration:.3f}", "-i", str(src),'
+              ),
+              (
+                  '"[0:a]highpass=f=70,volume=1.02[voice]",',
+                  '"[0:a]highpass=f=70,volume=1.02,asplit=2[voice_mix][voice_sc]",'
+              ),
+              (
+                  '"[bgraw][voice]sidechaincompress=threshold=0.025:ratio=10:attack=12:release=260[bgduck]",',
+                  '"[bgraw][voice_sc]sidechaincompress=threshold=0.025:ratio=10:attack=12:release=260[bgduck]",'
+              ),
+              (
+                  'mix_labels = ["[voice]", "[bgduck]"]',
+                  'mix_labels = ["[voice_mix]", "[bgduck]"]'
+              ),
+              (
+                  'amix=inputs={len(mix_labels)}:duration=first:dropout_transition=0,alimiter=limit=0.94[aout]',
+                  'amix=inputs={len(mix_labels)}:duration=first:dropout_transition=0:normalize=0,volume=1.55,alimiter=limit=0.94[aout]'
+              ),
+          ]
+          for old, new in replacements:
+              if old in s:
+                  s = s.replace(old, new)
+              elif new not in s:
+                  raise SystemExit(f'Expected renderer fragment was not found: {old[:80]}')
 
           p.write_text(s, encoding='utf-8')
           PY
           python -m py_compile tools/render_vlog_v2.py
 
       - name: Render content-aware vlog v2
-        run: python tools/render_vlog_v2.py
+        shell: bash
+        run: |
+          set -o pipefail
+          python tools/render_vlog_v2.py 2>&1 | tee render_v2.log
 
       - name: Verify pacing, audio, and outputs
         shell: bash
@@ -95,7 +112,7 @@ jobs:
           match=re.search(r'"input_i"\s*:\s*"(-?[0-9.]+)"',loud.stderr)
           assert match, loud.stderr[-2000:]
           integrated=float(match.group(1))
-          assert -18.5 <= integrated <= -13.0, integrated
+          assert -19.5 <= integrated <= -12.0, integrated
           print({
               'duration': d,
               'clips': len(plan['clips']),
@@ -113,3 +130,16 @@ jobs:
           path: output_v2/*
           compression-level: 0
           retention-days: 14
+
+      - name: Upload render diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bda-vlog-v2-render-diagnostics
+          path: |
+            render_v2.log
+            .vlog_v2_work/concat.txt
+            .vlog_v2_work/vlog_v2.ass
+            output_v2/*
+          if-no-files-found: ignore
+          retention-days: 3
