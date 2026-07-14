@@ -1,0 +1,46 @@
+name: Quick visual index
+
+on:
+  push:
+    branches: [vlog-edit]
+    paths:
+      - '.github/workflows/quick-visual-index.yml'
+      - 'tools/quick_visual_index.py'
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/quick-visual-index.yml'
+      - 'tools/quick_visual_index.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  index:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Check out full LFS source
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+          fetch-depth: 1
+
+      - name: Install FFmpeg and Chinese fonts
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg fonts-noto-cjk
+          git lfs install
+          git lfs pull
+
+      - name: Generate timeline and scene index
+        run: python tools/quick_visual_index.py
+
+      - name: Upload quick visual index
+        uses: actions/upload-artifact@v4
+        with:
+          name: quick-full-source-visual-index
+          path: quick_visual_index/*
+          compression-level: 0
+          retention-days: 14
