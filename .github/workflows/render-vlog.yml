@@ -36,18 +36,27 @@ jobs:
           test "$SIZE" -gt 1000000000
           ffprobe -v error -show_entries format=duration,size -of default=noprint_wrappers=1 "$VIDEO"
 
-      - name: Apply renderer timing fix
+      - name: Apply renderer timing and audio mix fixes
         run: |
           python - <<'PY'
           from pathlib import Path
           p = Path('tools/render_vlog_v2.py')
           s = p.read_text(encoding='utf-8')
-          old = '"ffmpeg", "-y", "-ss", f"{start:.3f}", "-i", str(src),\n            "-t", f"{duration:.3f}",'
-          new = '"ffmpeg", "-y", "-ss", f"{start:.3f}", "-t", f"{duration:.3f}", "-i", str(src),'
-          if old in s:
-              s = s.replace(old, new)
-          elif new not in s:
-              raise SystemExit('Expected renderer command was not found')
+
+          old_timing = '"ffmpeg", "-y", "-ss", f"{start:.3f}", "-i", str(src),\n            "-t", f"{duration:.3f}",'
+          new_timing = '"ffmpeg", "-y", "-ss", f"{start:.3f}", "-t", f"{duration:.3f}", "-i", str(src),'
+          if old_timing in s:
+              s = s.replace(old_timing, new_timing)
+          elif new_timing not in s:
+              raise SystemExit('Expected renderer timing command was not found')
+
+          old_mix = 'amix=inputs={len(mix_labels)}:duration=first:dropout_transition=0,alimiter=limit=0.94[aout]'
+          new_mix = 'amix=inputs={len(mix_labels)}:duration=first:dropout_transition=0:normalize=0,volume=1.55,alimiter=limit=0.94[aout]'
+          if old_mix in s:
+              s = s.replace(old_mix, new_mix)
+          elif new_mix not in s:
+              raise SystemExit('Expected renderer audio mix was not found')
+
           p.write_text(s, encoding='utf-8')
           PY
           python -m py_compile tools/render_vlog_v2.py
@@ -55,19 +64,45 @@ jobs:
       - name: Render content-aware vlog v2
         run: python tools/render_vlog_v2.py
 
-      - name: Verify pacing and outputs
+      - name: Verify pacing, audio, and outputs
         shell: bash
         run: |
           VIDEO="output_v2/北舞高能量毕业生_嘴闲不住的一天_vlog_v2.mp4"
           test -s "$VIDEO"
           python - <<'PY'
-          import json, subprocess
+          import json, re, subprocess
           p='output_v2/北舞高能量毕业生_嘴闲不住的一天_vlog_v2.mp4'
           d=float(subprocess.check_output(['ffprobe','-v','error','-show_entries','format=duration','-of','csv=p=0',p],text=True))
           plan=json.load(open('tools/vlog_v2_plan.json',encoding='utf-8'))
           assert 110 <= d <= 122, d
           assert len(plan['clips']) >= 65
-          print({'duration': d, 'clips': len(plan['clips']), 'average_shot_length': d/len(plan['clips'])})
+
+          probe=json.loads(subprocess.check_output([
+              'ffprobe','-v','error','-show_entries',
+              'stream=index,codec_type,codec_name,width,height,r_frame_rate,sample_rate,channels',
+              '-show_entries','format=duration,size','-of','json',p
+          ],text=True))
+          video=next(s for s in probe['streams'] if s['codec_type']=='video')
+          audio=next(s for s in probe['streams'] if s['codec_type']=='audio')
+          assert video['width']==720 and video['height']==1280
+          assert audio['channels']==2
+
+          loud=subprocess.run([
+              'ffmpeg','-hide_banner','-i',p,'-vn','-af',
+              'loudnorm=I=-16:TP=-1.5:LRA=11:print_format=json',
+              '-f','null','-'
+          ],text=True,capture_output=True,check=True)
+          match=re.search(r'"input_i"\s*:\s*"(-?[0-9.]+)"',loud.stderr)
+          assert match, loud.stderr[-2000:]
+          integrated=float(match.group(1))
+          assert -18.5 <= integrated <= -13.0, integrated
+          print({
+              'duration': d,
+              'clips': len(plan['clips']),
+              'average_shot_length': d/len(plan['clips']),
+              'integrated_loudness_lufs': integrated,
+              'resolution': f"{video['width']}x{video['height']}"
+          })
           PY
           ls -lh output_v2
 
