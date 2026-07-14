@@ -1,4 +1,4 @@
-name: Render BDA high-retention vlog v2
+name: Render clean BDA vlog v2 without text
 
 on:
   pull_request:
@@ -36,17 +36,45 @@ jobs:
           test "$SIZE" -gt 1000000000
           ffprobe -v error -show_entries format=duration,size -of default=noprint_wrappers=1 "$VIDEO"
 
-      - name: Apply renderer timing and audio graph fixes
+      - name: Configure clean 1080p caption-free renderer
         run: |
           python - <<'PY'
+          import json
           from pathlib import Path
+
+          plan_path = Path('tools/vlog_v2_plan.json')
+          plan = json.loads(plan_path.read_text(encoding='utf-8'))
+          plan['version'] = '2.2-clean'
+          plan['title'] = '北舞高能量毕业生｜嘴闲不住的一天｜纯净无字幕版'
+          plan['captions'] = []
+          plan['overlays'] = []
+          plan['auto_transcribe'] = False
+          plan['use_auto_captions'] = False
+          plan['text_policy'] = 'No burned-in titles, dialogue captions, chapter cards, counters, or end cards.'
+          plan_path.write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding='utf-8')
+
           p = Path('tools/render_vlog_v2.py')
           s = p.read_text(encoding='utf-8')
-
           replacements = [
               (
                   '"ffmpeg", "-y", "-ss", f"{start:.3f}", "-i", str(src),\n            "-t", f"{duration:.3f}",',
                   '"ffmpeg", "-y", "-ss", f"{start:.3f}", "-t", f"{duration:.3f}", "-i", str(src),'
+              ),
+              ('sw = int(round(720 * zoom / 2) * 2)', 'sw = int(round(1080 * zoom / 2) * 2)'),
+              ('sh = int(round(1280 * zoom / 2) * 2)', 'sh = int(round(1920 * zoom / 2) * 2)'),
+              (
+                  'x = max(0, (sw - 720) // 2 + (8 if idx % 4 == 1 else -8 if idx % 4 == 3 else 0))',
+                  'x = max(0, (sw - 1080) // 2 + (12 if idx % 4 == 1 else -12 if idx % 4 == 3 else 0))'
+              ),
+              ('y = max(0, (sh - 1280) // 2)', 'y = max(0, (sh - 1920) // 2)'),
+              ('f"crop=720:1280:{x}:{y},"', 'f"crop=1080:1920:{x}:{y},"'),
+              (
+                  '"eq=contrast=1.035:saturation=1.08:brightness=0.008,"',
+                  '"hqdn3d=0.7:0.7:3.0:3.0,eq=contrast=1.035:saturation=1.055:brightness=0.006:gamma=1.015,unsharp=3:3:0.30:3:3:0.0,"'
+              ),
+              (
+                  '"-c:v", "libx264", "-preset", "veryfast", "-crf", "20",',
+                  '"-c:v", "libx264", "-preset", "veryfast", "-crf", "18",'
               ),
               (
                   '"[0:a]highpass=f=70,volume=1.02[voice]",',
@@ -56,53 +84,68 @@ jobs:
                   '"[bgraw][voice]sidechaincompress=threshold=0.025:ratio=10:attack=12:release=260[bgduck]",',
                   '"[bgraw][voice_sc]sidechaincompress=threshold=0.025:ratio=10:attack=12:release=260[bgduck]",'
               ),
-              (
-                  'mix_labels = ["[voice]", "[bgduck]"]',
-                  'mix_labels = ["[voice_mix]", "[bgduck]"]'
-              ),
+              ('mix_labels = ["[voice]", "[bgduck]"]', 'mix_labels = ["[voice_mix]", "[bgduck]"]'),
               (
                   'amix=inputs={len(mix_labels)}:duration=first:dropout_transition=0,alimiter=limit=0.94[aout]',
                   'amix=inputs={len(mix_labels)}:duration=first:dropout_transition=0:normalize=0,volume=1.55,alimiter=limit=0.94[aout]'
               ),
+              (
+                  'vf = f"ass=\'{escaped_ass}\',fade=t=in:st=0:d=0.18,fade=t=out:st={max(0.0, duration-0.45):.3f}:d=0.45"',
+                  'vf = f"fade=t=in:st=0:d=0.18,fade=t=out:st={max(0.0, duration-0.45):.3f}:d=0.45"'
+              ),
+              (
+                  'final = OUT / "北舞高能量毕业生_嘴闲不住的一天_vlog_v2.mp4"',
+                  'final = OUT / "北舞高能量毕业生_嘴闲不住的一天_vlog_v2_高清无字幕版.mp4"'
+              ),
+              (
+                  '"-map", "0:v", "-map", "[aout]", "-c:v", "libx264", "-preset", "medium", "-crf", "19",',
+                  '"-map", "0:v", "-map", "[aout]", "-c:v", "libx264", "-preset", "medium", "-crf", "17",'
+              ),
           ]
+
           for old, new in replacements:
               if old in s:
                   s = s.replace(old, new)
               elif new not in s:
-                  raise SystemExit(f'Expected renderer fragment was not found: {old[:80]}')
+                  raise SystemExit(f'Expected renderer fragment was not found: {old[:100]}')
 
           p.write_text(s, encoding='utf-8')
           PY
           python -m py_compile tools/render_vlog_v2.py
+          grep -n "crop=1080\|高清无字幕版\|vf = f\"fade" tools/render_vlog_v2.py
 
-      - name: Render content-aware vlog v2
+      - name: Render clean 1080p vlog
         shell: bash
         run: |
           set -o pipefail
-          python tools/render_vlog_v2.py 2>&1 | tee render_v2.log
+          python tools/render_vlog_v2.py 2>&1 | tee render_clean.log
+          rm -f output_v2/*字幕*.srt
 
-      - name: Verify pacing, audio, and outputs
+      - name: Verify clean HD output
         shell: bash
         run: |
-          VIDEO="output_v2/北舞高能量毕业生_嘴闲不住的一天_vlog_v2.mp4"
+          VIDEO="output_v2/北舞高能量毕业生_嘴闲不住的一天_vlog_v2_高清无字幕版.mp4"
           test -s "$VIDEO"
           python - <<'PY'
           import json, re, subprocess
-          p='output_v2/北舞高能量毕业生_嘴闲不住的一天_vlog_v2.mp4'
+          p='output_v2/北舞高能量毕业生_嘴闲不住的一天_vlog_v2_高清无字幕版.mp4'
           d=float(subprocess.check_output(['ffprobe','-v','error','-show_entries','format=duration','-of','csv=p=0',p],text=True))
-          plan=json.load(open('tools/vlog_v2_plan.json',encoding='utf-8'))
           assert 110 <= d <= 122, d
-          assert len(plan['clips']) >= 65
-
           probe=json.loads(subprocess.check_output([
               'ffprobe','-v','error','-show_entries',
               'stream=index,codec_type,codec_name,width,height,r_frame_rate,sample_rate,channels',
-              '-show_entries','format=duration,size','-of','json',p
+              '-show_entries','format=duration,size,bit_rate','-of','json',p
           ],text=True))
           video=next(s for s in probe['streams'] if s['codec_type']=='video')
           audio=next(s for s in probe['streams'] if s['codec_type']=='audio')
-          assert video['width']==720 and video['height']==1280
+          assert video['width']==1080 and video['height']==1920
           assert audio['channels']==2
+
+          plan=json.load(open('tools/vlog_v2_plan.json',encoding='utf-8'))
+          assert plan['captions']==[] and plan['overlays']==[]
+          renderer=open('tools/render_vlog_v2.py',encoding='utf-8').read()
+          active_vf=next(line for line in renderer.splitlines() if line.strip().startswith('vf = f'))
+          assert 'ass=' not in active_vf, active_vf
 
           loud=subprocess.run([
               'ffmpeg','-hide_banner','-i',p,'-vn','-af',
@@ -110,36 +153,37 @@ jobs:
               '-f','null','-'
           ],text=True,capture_output=True,check=True)
           match=re.search(r'"input_i"\s*:\s*"(-?[0-9.]+)"',loud.stderr)
-          assert match, loud.stderr[-2000:]
+          assert match
           integrated=float(match.group(1))
           assert -19.5 <= integrated <= -12.0, integrated
           print({
               'duration': d,
-              'clips': len(plan['clips']),
-              'average_shot_length': d/len(plan['clips']),
+              'resolution': f"{video['width']}x{video['height']}",
               'integrated_loudness_lufs': integrated,
-              'resolution': f"{video['width']}x{video['height']}"
+              'burned_in_text': False,
+              'size_bytes': probe['format']['size']
           })
           PY
           ls -lh output_v2
 
-      - name: Upload revised vlog, subtitles, and edit plan
+      - name: Upload clean caption-free vlog
         uses: actions/upload-artifact@v4
         with:
-          name: bda-high-energy-graduate-vlog-v2
-          path: output_v2/*
+          name: bda-high-energy-graduate-vlog-v2-clean-1080p
+          path: |
+            output_v2/北舞高能量毕业生_嘴闲不住的一天_vlog_v2_高清无字幕版.mp4
+            output_v2/剪辑方案_v2.json
           compression-level: 0
           retention-days: 14
 
-      - name: Upload render diagnostics on failure
+      - name: Upload diagnostics on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: bda-vlog-v2-render-diagnostics
+          name: bda-vlog-clean-render-diagnostics
           path: |
-            render_v2.log
+            render_clean.log
             .vlog_v2_work/concat.txt
-            .vlog_v2_work/vlog_v2.ass
             output_v2/*
           if-no-files-found: ignore
           retention-days: 3
