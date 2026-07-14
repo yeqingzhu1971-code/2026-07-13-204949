@@ -1,4 +1,4 @@
-name: Render BDA dialogue vlog v3
+name: Render BDA dialogue vlog v3 caption-polished
 
 on:
   pull_request:
@@ -19,12 +19,10 @@ jobs:
           lfs: true
           fetch-depth: 1
 
-      - name: Install FFmpeg, Chinese fonts, and speech recognition
+      - name: Install FFmpeg and Chinese fonts
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg fonts-noto-cjk
-          python -m pip install --upgrade pip
-          python -m pip install faster-whisper
 
       - name: Pull and verify the real source video
         shell: bash
@@ -38,25 +36,49 @@ jobs:
           test "$SIZE" -gt 1000000000
           ffprobe -v error -show_entries format=duration,size -of default=noprint_wrappers=1 "$VIDEO"
 
-      - name: Validate the dialogue-led edit configuration
+      - name: Validate dialogue edit and curated spoken captions
         run: |
           python -m py_compile tools/render_vlog_v3.py
           python - <<'PY'
           import json
           plan=json.load(open('tools/vlog_v2_plan.json',encoding='utf-8'))
+          captions=json.load(open('tools/vlog_v3_curated_captions.json',encoding='utf-8'))
           clips=plan['clips']
           dialogue=[c for c in clips if c.get('type')=='dialogue']
           dialogue_seconds=sum(c['duration']/c.get('speed',1.0) for c in dialogue)
           total=sum(c['duration']/c.get('speed',1.0) for c in clips)
           assert len(dialogue) >= 20, len(dialogue)
-          assert dialogue_seconds >= 125, dialogue_seconds
-          assert 155 <= total <= 175, total
-          assert 'beeps' in plan['audio_policy'] and 'no beeps' in plan['audio_policy']
+          assert dialogue_seconds >= 130, dialogue_seconds
+          assert 165 <= total <= 175, total
+          assert len(captions) >= 50, len(captions)
+          assert all(0 <= c['start'] < c['end'] <= total for c in captions)
+          joined=''.join(c['text'] for c in captions)
+          assert not any(x in joined for x in ['社交能量','嘴比行程还忙','肌肉记忆','凌晨第二顿，合理','嘀嘀嘀'])
           renderer=open('tools/render_vlog_v3.py',encoding='utf-8').read()
           assert 'make_sfx' not in renderer
           assert 'whoosh.wav' not in renderer and 'ding.wav' not in renderer and 'pop.wav' not in renderer
-          print({'clips':len(clips),'dialogue_clips':len(dialogue),'dialogue_seconds':dialogue_seconds,'planned_duration':total})
+          print({'clips':len(clips),'dialogue_clips':len(dialogue),'dialogue_seconds':dialogue_seconds,'planned_duration':total,'curated_caption_cues':len(captions)})
           PY
+
+      - name: Configure renderer to use polished captions
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('tools/render_vlog_v3.py')
+          s=p.read_text(encoding='utf-8')
+          old='cues = transcribe_to_cues(rough, str(plan.get("whisper_model", "medium")))'
+          new='cues = json.loads((ROOT / "tools" / "vlog_v3_curated_captions.json").read_text(encoding="utf-8"))'
+          if old in s:
+              s=s.replace(old,new)
+          elif new not in s:
+              raise SystemExit('Could not configure curated captions')
+          old_name='北舞高能量毕业生_嘴闲不住的一天_vlog_v3_对话加强版.mp4'
+          new_name='北舞高能量毕业生_嘴闲不住的一天_vlog_v3_对话字幕校正版.mp4'
+          s=s.replace(old_name,new_name)
+          p.write_text(s,encoding='utf-8')
+          PY
+          python -m py_compile tools/render_vlog_v3.py
+          grep -n "curated_captions\|对话字幕校正版" tools/render_vlog_v3.py
 
       - name: Render dialogue-focused 1080p vlog
         shell: bash
@@ -64,17 +86,17 @@ jobs:
           set -o pipefail
           python tools/render_vlog_v3.py 2>&1 | tee render_v3.log
 
-      - name: Verify subtitles, music-only mix, and output quality
+      - name: Verify polished subtitles, music-only mix, and output quality
         shell: bash
         run: |
-          VIDEO="output_v3/北舞高能量毕业生_嘴闲不住的一天_vlog_v3_对话加强版.mp4"
+          VIDEO="output_v3/北舞高能量毕业生_嘴闲不住的一天_vlog_v3_对话字幕校正版.mp4"
           SRT="output_v3/北舞高能量毕业生_嘴闲不住的一天_v3_对白字幕.srt"
           test -s "$VIDEO"
           test -s "$SRT"
           test -s "output_v3/v3_抽帧预览.jpg"
           python - <<'PY'
           import json, re, subprocess
-          video_path='output_v3/北舞高能量毕业生_嘴闲不住的一天_vlog_v3_对话加强版.mp4'
+          video_path='output_v3/北舞高能量毕业生_嘴闲不住的一天_vlog_v3_对话字幕校正版.mp4'
           srt_path='output_v3/北舞高能量毕业生_嘴闲不住的一天_v3_对白字幕.srt'
           probe=json.loads(subprocess.check_output([
               'ffprobe','-v','error','-show_entries',
@@ -84,13 +106,15 @@ jobs:
           duration=float(probe['format']['duration'])
           v=next(s for s in probe['streams'] if s['codec_type']=='video')
           a=next(s for s in probe['streams'] if s['codec_type']=='audio')
-          assert 155 <= duration <= 175, duration
+          assert 165 <= duration <= 175, duration
           assert v['width']==1080 and v['height']==1920
           assert a['channels']==2
           srt=open(srt_path,encoding='utf-8').read()
           cue_count=len(re.findall(r'^\d+$',srt,re.M))
-          assert cue_count >= 25, cue_count
-          assert not any(x in srt for x in ['社交能量','嘴比行程还忙','肌肉记忆','凌晨第二顿，合理'])
+          assert cue_count >= 50, cue_count
+          expected=['薯条要吗？','这是 duty，是吗？','这是那个外卖柜。','意大利国旗','那做个蛋炒饭吧。','有你真好。']
+          assert all(x in srt for x in expected), [x for x in expected if x not in srt]
+          assert not any(x in srt for x in ['好多的众生的','意大利十貫','看你出去欣賞看是','社交能量','嘴比行程还忙'])
           loud=subprocess.run([
               'ffmpeg','-hide_banner','-i',video_path,'-vn','-af',
               'loudnorm=I=-16:TP=-1.5:LRA=11:print_format=json','-f','null','-'
@@ -99,14 +123,14 @@ jobs:
           assert match
           lufs=float(match.group(1))
           assert -20 <= lufs <= -12, lufs
-          print({'duration':duration,'resolution':f"{v['width']}x{v['height']}",'subtitle_cues':cue_count,'loudness_lufs':lufs,'added_sfx':0})
+          print({'duration':duration,'resolution':f"{v['width']}x{v['height']}",'subtitle_cues':cue_count,'loudness_lufs':lufs,'added_sfx':0,'caption_source':'manually polished spoken dialogue'})
           PY
           ls -lh output_v3
 
-      - name: Upload dialogue-focused vlog and subtitle files
+      - name: Upload polished dialogue vlog and subtitle files
         uses: actions/upload-artifact@v4
         with:
-          name: bda-high-energy-graduate-vlog-v3-dialogue
+          name: bda-high-energy-graduate-vlog-v3-dialogue-polished
           path: output_v3/*
           compression-level: 0
           retention-days: 14
@@ -115,7 +139,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: bda-vlog-v3-dialogue-diagnostics
+          name: bda-vlog-v3-polished-diagnostics
           path: |
             render_v3.log
             .vlog_v3_work/concat.txt
