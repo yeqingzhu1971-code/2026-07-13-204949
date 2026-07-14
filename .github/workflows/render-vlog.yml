@@ -36,6 +36,24 @@ jobs:
           test "$SIZE" -gt 1000000000
           ffprobe -v error -show_entries format=duration,size -of default=noprint_wrappers=1 "$VIDEO"
 
+      - name: Apply renderer timing fix
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('tools/render_vlog_v2.py')
+          s = p.read_text(encoding='utf-8')
+          old = '''            "ffmpeg", "-y", "-ss", f"{start:.3f}", "-i", str(src),
+                      "-t", f"{duration:.3f}", "-vf", vf, "-af", af,'''
+          new = '''            "ffmpeg", "-y", "-ss", f"{start:.3f}", "-t", f"{duration:.3f}", "-i", str(src),
+                      "-vf", vf, "-af", af,'''
+          if old in s:
+              s = s.replace(old, new)
+          elif new not in s:
+              raise SystemExit('Expected renderer command was not found')
+          p.write_text(s, encoding='utf-8')
+          PY
+          python -m py_compile tools/render_vlog_v2.py
+
       - name: Render content-aware vlog v2
         run: python tools/render_vlog_v2.py
 
@@ -44,14 +62,12 @@ jobs:
         run: |
           VIDEO="output_v2/北舞高能量毕业生_嘴闲不住的一天_vlog_v2.mp4"
           test -s "$VIDEO"
-          DURATION=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$VIDEO")
-          echo "Final duration: $DURATION"
           python - <<'PY'
           import json, subprocess
           p='output_v2/北舞高能量毕业生_嘴闲不住的一天_vlog_v2.mp4'
           d=float(subprocess.check_output(['ffprobe','-v','error','-show_entries','format=duration','-of','csv=p=0',p],text=True))
-          assert 105 <= d <= 125, d
           plan=json.load(open('tools/vlog_v2_plan.json',encoding='utf-8'))
+          assert 110 <= d <= 122, d
           assert len(plan['clips']) >= 65
           print({'duration': d, 'clips': len(plan['clips']), 'average_shot_length': d/len(plan['clips'])})
           PY
