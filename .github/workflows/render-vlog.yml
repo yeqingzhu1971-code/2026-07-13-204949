@@ -19,10 +19,10 @@ jobs:
           lfs: true
           fetch-depth: 1
 
-      - name: Install FFmpeg and Chinese fonts
+      - name: Install FFmpeg, Chinese fonts, and music dependency
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg fonts-noto-cjk
+          sudo apt-get install -y ffmpeg fonts-noto-cjk python3-numpy
 
       - name: Pull and verify the real source video
         shell: bash
@@ -40,7 +40,7 @@ jobs:
         run: |
           python -m py_compile tools/render_vlog_v3.py
           python - <<'PY'
-          import json
+          import json, numpy
           plan=json.load(open('tools/vlog_v2_plan.json',encoding='utf-8'))
           captions=json.load(open('tools/vlog_v3_curated_captions.json',encoding='utf-8'))
           clips=plan['clips']
@@ -57,7 +57,7 @@ jobs:
           renderer=open('tools/render_vlog_v3.py',encoding='utf-8').read()
           assert 'make_sfx' not in renderer
           assert 'whoosh.wav' not in renderer and 'ding.wav' not in renderer and 'pop.wav' not in renderer
-          print({'clips':len(clips),'dialogue_clips':len(dialogue),'dialogue_seconds':dialogue_seconds,'planned_duration':total,'curated_caption_cues':len(captions)})
+          print({'clips':len(clips),'dialogue_clips':len(dialogue),'dialogue_seconds':dialogue_seconds,'planned_duration':total,'curated_caption_cues':len(captions),'numpy':numpy.__version__})
           PY
 
       - name: Configure renderer to use polished captions
