@@ -1,4 +1,4 @@
-name: Render energetic BDA vlog
+name: Analyze BDA vlog source
 
 on:
   pull_request:
@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 jobs:
-  render:
+  analyze:
     runs-on: ubuntu-latest
     timeout-minutes: 180
     steps:
@@ -19,10 +19,12 @@ jobs:
           lfs: true
           fetch-depth: 1
 
-      - name: Install FFmpeg and Chinese fonts
+      - name: Install FFmpeg, Chinese fonts, and analysis tools
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg fonts-noto-cjk
+          python -m pip install --upgrade pip
+          python -m pip install faster-whisper
 
       - name: Pull and verify the real source video
         shell: bash
@@ -33,50 +35,22 @@ jobs:
           test -f "$VIDEO"
           SIZE=$(stat -c%s "$VIDEO")
           echo "Source size: $SIZE bytes"
-          if [ "$SIZE" -lt 1000000000 ]; then
-            echo "Git LFS did not provide the real video body"
-            head -20 "$VIDEO" || true
-            exit 1
-          fi
+          test "$SIZE" -gt 1000000000
           ffprobe -v error -show_entries format=duration,size -of default=noprint_wrappers=1 "$VIDEO"
 
-      - name: Tune renderer for the reference vlog style
+      - name: Build scene index, timecoded proxy, and full dialogue transcript
+        run: python tools/analyze_source.py
+
+      - name: Verify analysis outputs
         run: |
-          python - <<'PY'
-          from pathlib import Path
-          p = Path("tools/render_vlog.py")
-          s = p.read_text(encoding="utf-8")
-          s = s.replace(
-              '"--model", "base", "--language", "Chinese",',
-              '"--model", "small", "--language", "zh", "--initial_prompt", "北京舞蹈学院高能量毕业生的一日生活Vlog，内容包括做饭、吃饭、出门、聚会和聊天。请准确转写为简体中文口语字幕。",'
-          )
-          s = s.replace(
-              'title = "北舞高能量毕业生\\\\N嘴闲不住的一天！"',
-              'title = "北舞高能量毕业生｜嘴闲不住的一天！"'
-          )
-          s = s.replace("fontsize=43", "fontsize=34")
-          p.write_text(s, encoding="utf-8")
-          print("Renderer tuned for improved Chinese captions and corrected title")
-          PY
-          grep -n "model\|title =\|fontsize=34" tools/render_vlog.py | tail -10
+          find source_analysis -maxdepth 1 -type f -printf '%f %s bytes\n' | sort
+          test -s source_analysis/source_proxy_timecode.mp4
+          test -s source_analysis/full_source_transcript.json
 
-      - name: Install speech recognition
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install openai-whisper
-
-      - name: Render vlog
-        run: python tools/render_vlog.py
-
-      - name: Verify outputs
-        run: |
-          ls -lh output
-          ffprobe -v error -show_entries format=duration,size -of default=noprint_wrappers=1 "output/北舞高能量毕业生_嘴闲不住的一天_vlog.mp4"
-
-      - name: Upload final vlog and subtitles
+      - name: Upload source analysis
         uses: actions/upload-artifact@v4
         with:
-          name: bda-high-energy-graduate-vlog-final
-          path: output/*
+          name: bda-vlog-source-analysis
+          path: source_analysis/*
           compression-level: 0
-          retention-days: 14
+          retention-days: 5
